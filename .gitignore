@@ -107,3 +107,17 @@ InitTestScene*.unity*
 
 # Auto-generated cache in Assets folder
 /[Aa]ssets/[Ss]ceneDependencyCache*
+
+
+# --- Custom Additions for IDEs & OS ---
+# Visual Studio Code
+.vscode/
+
+# JetBrains Rider / IntelliJ
+.idea/
+
+# macOS Finder junk
+.DS_Store
+
+# Windows thumbnail cache
+Thumbs.db
