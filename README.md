@@ -1,5 +1,7 @@
 # Unixel
 
+## Project Overview
+
 Unixel is a Unity project focused on building a custom 3D pixel-art rendering system and tools for creating stylized games.
 
 The project will include custom shaders, lighting, pixel-perfect cameras, environmental effects, and tools for building 3D worlds.
