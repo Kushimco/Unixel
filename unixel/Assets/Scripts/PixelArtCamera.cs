@@ -58,6 +58,11 @@
 //      We throw this information away when snapping, so instead we measure it and cancel it out
 //      later, when displaying the image (see UV below). This restores smooth motion.
 //
+//  Logical position vs. visual (snapped) position
+//      A moving object really lives at a smooth "logical" position (physics, input, AI use this).
+//      What we DRAW is a copy of that position snapped to the texel grid, so the object's pixels
+//      never crawl. Keeping the two separate is the same idea as pivot vs. camera.
+//
 //  UV coordinates
 //      Coordinates used to look up a position inside an image. (0,0) = bottom-left corner,
 //      (1,1) = top-right corner, regardless of the image's size in texels. "Shifting the UVs"
@@ -350,41 +355,60 @@ public class PixelArtCamera : MonoBehaviour
         // => one texel on screen always equals exactly one texel-sized chunk of world.
         cam.orthographicSize = rt.height * texel * 0.5f;
 
-        // The camera's three axes in world space. We read them but never modify the rotation.
-        Transform t = transform;
-        Vector3 right = t.right;     // +x in camera space (screen right)
-        Vector3 up = t.up;           // +y in camera space (screen up)
-        Vector3 forward = t.forward; // +z in camera space (into the screen)
-
         // Step 1: where the camera WOULD be if there were no snapping:
         // exactly 'distance' units behind the pivot, looking at it.
-        Vector3 ideal = pivot.position - forward * distance;
+        // (We only ever READ the camera's rotation - it is yours to set.)
+        Vector3 ideal = pivot.position - transform.forward * distance;
 
-        // Step 2: express that position in camera space along the two axes that matter.
-        // Dot(position, axis) = "how far along that axis is this position?"
-        float x = Vector3.Dot(ideal, right);
-        float y = Vector3.Dot(ideal, up);
+        // Step 2: snap that position onto the texel grid and get back the snap error.
+        // The maths is explained in detail in SnapToTexelGrid below.
+        transform.position = SnapToTexelGrid(ideal, out Vector2 errTexels);
 
-        // Step 3: round to the nearest multiple of one texel. THIS is the snap.
-        // The grid is anchored to the world origin (not to the pivot), so the same world point
-        // always lands on the same texel phase no matter where the pivot has travelled.
-        // We do not snap along 'forward': in an orthographic view, moving toward/away from the
-        // scene doesn't shift anything sideways, so it cannot cause pixel creep.
+        // Step 3: remember the error, in TEXELS (always within -0.5 .. +0.5).
+        // The snapped camera sees the world shifted by this amount relative to the ideal camera.
+        // Sampling the texture shifted by +error moves the picture by -error, cancelling it out.
+        SubTexelOffset = errTexels;
+
+        // Step 4: slide the displayed picture by that error (or not, if smoothing is disabled for comparison).
+        ApplyUV(subTexelSmoothing ? SubTexelOffset : Vector2.zero);
+    }
+
+    /// <summary>
+    /// Snaps a WORLD position onto the texel grid. This is THE snapping function: the camera uses it
+    /// on itself, and moving objects use it (via PixelSnapObject) so that their pixels stay stable.
+    ///
+    /// How it works:
+    ///   1. Convert the position into camera-space x (along right) and y (along up) with dot products.
+    ///   2. Round each to the nearest multiple of one texel (TexelWorldSize). THIS is the snap.
+    ///      The grid is anchored to the world origin, so the same world point always lands on the same
+    ///      texel phase no matter where you are. We do not snap along 'forward': in an orthographic
+    ///      view, moving toward/away from the scene doesn't shift anything sideways, so it cannot cause
+    ///      pixel creep.
+    ///   3. Move the position by the tiny corrections (sx - x, sy - y) along the matching axes.
+    ///
+    /// Only the camera's ROTATION and texel size are used, never its position, so it can be called
+    /// at any time in the frame.
+    /// </summary>
+    /// <param name="worldPos">The smooth, unsnapped world position.</param>
+    /// <param name="errorTexels">Output: (unsnapped - snapped) along camera right/up, in texels (-0.5 .. +0.5).</param>
+    /// <returns>The snapped world position.</returns>
+    public Vector3 SnapToTexelGrid(Vector3 worldPos, out Vector2 errorTexels)
+    {
+        float texel = TexelWorldSize;
+        Vector3 right = transform.right; // screen-right in world space
+        Vector3 up = transform.up;       // screen-up in world space
+
+        float x = Vector3.Dot(worldPos, right);
+        float y = Vector3.Dot(worldPos, up);
         float sx = Mathf.Round(x / texel) * texel;
         float sy = Mathf.Round(y / texel) * texel;
 
-        // Step 4: move the camera to the snapped position.
-        // (sx - x) and (sy - y) are the tiny corrections; we apply them along the matching axes.
-        t.position = ideal + right * (sx - x) + up * (sy - y);
-
-        // Step 5: remember the error, converted to TEXELS (so it is always in the range -0.5 .. +0.5).
-        // The snapped camera sees the world shifted by (x - sx, y - sy) relative to the ideal camera.
-        // Sampling the texture shifted by +error moves the picture by -error, cancelling it out.
-        SubTexelOffset = new Vector2(x - sx, y - sy) / texel;
-
-        // Step 6: slide the displayed picture by that error (or not, if smoothing is disabled for comparison).
-        ApplyUV(subTexelSmoothing ? SubTexelOffset : Vector2.zero);
+        errorTexels = new Vector2(x - sx, y - sy) / texel;
+        return worldPos + right * (sx - x) + up * (sy - y);
     }
+
+    /// <summary>Convenience overload when you don't need the error.</summary>
+    public Vector3 SnapToTexelGrid(Vector3 worldPos) => SnapToTexelGrid(worldPos, out _);
 
     /// <summary>
     /// Chooses which rectangle of the render texture is shown, in UV space (0..1).
@@ -506,6 +530,9 @@ public class PixelArtCamera : MonoBehaviour
     // =================================================================================================
     //  COMMON PITFALLS
     // =================================================================================================
+    //   * Moving objects (player, enemies) that are NOT snapped have crawling/flickering edge pixels, because
+    //     they are rasterised at a different sub-texel offset every frame. Add PixelSnapObject to their
+    //     visual child. Rotating objects can't be snapped; their pixels will still change as they turn.
     //   * Moving the camera object directly  -> it gets overwritten every frame. Move the PIVOT instead.
     //   * Changing pixelsPerUnit continuously (smooth zoom) -> the grid resizes each frame and shimmers.
     //     Zoom in whole steps (e.g. 16 -> 32 -> 64), or change the render texture size instead.
@@ -520,11 +547,8 @@ public class PixelArtCamera : MonoBehaviour
     // =================================================================================================
     //  IDEAS FOR EXTENDING  (good first features to build)
     // =================================================================================================
-    //   1. SNAP MOVING OBJECTS TOO
-    //      Characters/props that move smoothly will "swim" against the grid just like the camera did.
-    //      Do the same trick per object: project its position onto cam.right / cam.up, round to
-    //      TexelWorldSize, and render the object at the snapped position. (Advanced: shift only the
-    //      mesh, keep the object's logical position separate - same idea as pivot vs. camera.)
+    //   1. SNAP MOVING OBJECTS TOO   (implemented: see PixelSnapObject.cs and SnapToTexelGrid above)
+    //      Next step: a smoothed camera follow, or snapping object ROTATION in discrete steps.
     //
     //   2. CANCEL THE SNAP IN SHADERS
     //      SubTexelOffset is public so other systems can use it. A custom full-screen effect that

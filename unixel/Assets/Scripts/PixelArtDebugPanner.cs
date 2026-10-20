@@ -7,10 +7,10 @@ using UnityEngine;
 /// </summary>
 public class PixelArtDebugPanner : MonoBehaviour
 {
-    public Vector3 axis = Vector3.right;
-    public float amplitude = 4f;
+    public Vector3 axis = new Vector3(1f,0f,1f);
+    public float amplitude = 2f;
     [Tooltip("Radians per second. Keep it low.")]
-    public float speed = 0.15f;
+    public float speed = 0.25f;
 
     Vector3 start;
 
